@@ -27,18 +27,13 @@ func NoCredentials() Credentials {
 	}
 }
 
-func CredentialsFromFile(path string) (Credentials, error) {
-	configBytes, err := ioutil.ReadFile(path)
-	if err != nil {
-		return Credentials{}, err
-	}
-
+func ParseCredentials(b []byte) (Credentials, error) {
 	var config struct {
 		Auths map[string]struct {
 			Auth string
 		}
 	}
-	if err = json.Unmarshal(configBytes, &config); err != nil {
+	if err := json.Unmarshal(b, &config); err != nil {
 		return Credentials{}, err
 	}
 
@@ -84,6 +79,15 @@ func CredentialsFromFile(path string) (Credentials, error) {
 	return Credentials{m: m}, nil
 }
 
+func CredentialsFromFile(path string) (Credentials, error) {
+	configBytes, err := ioutil.ReadFile(path)
+	if err != nil {
+		return Credentials{}, err
+	}
+
+	return ParseCredentials(configBytes)
+}
+
 // For yields an authenticator for a specific host.
 func (cs Credentials) credsFor(host string) creds {
 	if cred, found := cs.m[host]; found {
@@ -104,4 +108,10 @@ func (cs Credentials) Hosts() []string {
 		hosts = append(hosts, host)
 	}
 	return hosts
+}
+
+func (cs Credentials) Merge(c Credentials) {
+	for k, v := range c.m {
+		cs.m[k] = v
+	}
 }

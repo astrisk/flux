@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/go-kit/kit/log"
-	discovery "k8s.io/client-go/1.5/discovery"
+	"k8s.io/client-go/1.5/discovery"
 	v1alpha1apps "k8s.io/client-go/1.5/kubernetes/typed/apps/v1alpha1"
 	v1beta1authentication "k8s.io/client-go/1.5/kubernetes/typed/authentication/v1beta1"
 	v1beta1authorization "k8s.io/client-go/1.5/kubernetes/typed/authorization/v1beta1"
@@ -133,7 +133,7 @@ func TestSyncMalformed(t *testing.T) {
 	kube, mock := setup(t)
 	err := kube.Sync(cluster.SyncDef{
 		Actions: []cluster.SyncAction{
-			cluster.SyncAction{
+			{
 				ResourceID: "foobar",
 				Apply:      []byte("garbage"),
 			},
@@ -151,7 +151,7 @@ func TestSyncOrder(t *testing.T) {
 	kube, mock := setup(t)
 	if err := kube.Sync(cluster.SyncDef{
 		Actions: []cluster.SyncAction{
-			cluster.SyncAction{
+			{
 				ResourceID: "foobar",
 				Delete:     deploymentDef("delete first"),
 				Apply:      deploymentDef("apply last"),
@@ -162,8 +162,8 @@ func TestSyncOrder(t *testing.T) {
 	}
 
 	expected := []command{
-		command{"delete", "delete first"},
-		command{"apply", "apply last"},
+		{"delete", "delete first"},
+		{"apply", "apply last"},
 	}
 	if !reflect.DeepEqual(expected, mock.commands) {
 		t.Errorf("expected commands:\n%#v\ngot:\n%#v", expected, mock.commands)
@@ -178,12 +178,12 @@ func TestSkipOnError(t *testing.T) {
 
 	def := cluster.SyncDef{
 		Actions: []cluster.SyncAction{
-			cluster.SyncAction{
+			{
 				ResourceID: "fail in middle",
 				Delete:     deploymentDef("should fail"),
 				Apply:      deploymentDef("skipped"),
 			},
-			cluster.SyncAction{
+			{
 				ResourceID: "proceed",
 				Apply:      deploymentDef("apply works"),
 			},
@@ -201,11 +201,29 @@ func TestSkipOnError(t *testing.T) {
 	}
 
 	expected := []command{
-		command{"delete", "should fail"},
+		{"delete", "should fail"},
 		// skip to next resource after failure
-		command{"apply", "apply works"},
+		{"apply", "apply works"},
 	}
 	if !reflect.DeepEqual(expected, mock.commands) {
 		t.Errorf("expected commands:\n%#v\ngot:\n%#v", expected, mock.commands)
 	}
 }
+
+//func TestGetPodSecrets(t *testing.T) {
+//	kube, mock := setup(t)
+//	svc := cluster.Service{ID: flux.ServiceID("namespace/foobar")}
+//	creds, err := kube.ImagePullCredentials(svc)
+//	if err != nil {
+//		t.Error(err)
+//	}
+//	t.Log(creds)
+//
+//	expected := []command{
+//		command{"delete", "delete first"},
+//		command{"apply", "apply last"},
+//	}
+//	if !reflect.DeepEqual(expected, mock.commands) {
+//		t.Errorf("expected commands:\n%#v\ngot:\n%#v", expected, mock.commands)
+//	}
+//}

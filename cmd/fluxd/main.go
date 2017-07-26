@@ -76,7 +76,6 @@ func main() {
 		gitNotesRef     = fs.String("git-notes-ref", "flux", "ref to use for keeping commit annotations in git notes")
 		gitPollInterval = fs.Duration("git-poll-interval", 5*time.Minute, "period at which to poll git repo for new commits")
 		// registry
-		dockerCredFile       = fs.String("docker-config", "~/.docker/config.json", "Path to config file with credentials for DockerHub, quay.io etc.")
 		memcachedHostname    = fs.String("memcached-hostname", "", "Hostname for memcached service to use when caching chunks. If empty, no memcached will be used.")
 		memcachedTimeout     = fs.Duration("memcached-timeout", time.Second, "Maximum time to wait before giving up on memcached requests.")
 		memcachedService     = fs.String("memcached-service", "memcached", "SRV service used to discover memcache servers.")
@@ -134,6 +133,8 @@ func main() {
 			logger.Log("err", err)
 			os.Exit(1)
 		}
+		clientset.Core()
+
 		serverVersion, err := clientset.ServerVersion()
 		if err != nil {
 			logger.Log("err", err)
@@ -216,13 +217,9 @@ func main() {
 			defer memcacheClient.Stop()
 		}
 
-		creds, err := registry.CredentialsFromFile(*dockerCredFile)
-		if err != nil {
-			logger.Log("err", err)
-		}
 		cacheLogger := log.NewContext(logger).With("component", "cache")
 		cache = registry.NewRegistry(
-			registry.NewCacheClientFactory(creds, cacheLogger, memcacheClient, *registryCacheExpiry),
+			registry.NewCacheClientFactory(cacheLogger, memcacheClient, *registryCacheExpiry),
 			cacheLogger,
 			*memcachedConnections,
 		)
@@ -230,7 +227,7 @@ func main() {
 
 		// Remote
 		registryLogger := log.NewContext(logger).With("component", "registry")
-		remoteFactory := registry.NewRemoteClientFactory(creds, registryLogger, registryMiddleware.RateLimiterConfig{
+		remoteFactory := registry.NewRemoteClientFactory(registryLogger, registryMiddleware.RateLimiterConfig{
 			RPS:   *registryRPS,
 			Burst: *registryBurst,
 		})
@@ -240,7 +237,6 @@ func main() {
 		cacheWarmer = registry.Warmer{
 			Logger:        warmerLogger,
 			ClientFactory: remoteFactory,
-			Creds:         creds,
 			Expiry:        *registryCacheExpiry,
 			Reader:        memcacheClient,
 			Writer:        memcacheClient,
@@ -422,22 +418,36 @@ func checkForUpdates(clusterString string, gitString string, logger log.Logger) 
 	return checkpoint.CheckInterval(&params, versionCheckPeriod, handleResponse)
 }
 
-func servicesToRepositories(k8s cluster.Cluster, log log.Logger) func() []flux.ImageID {
-	return func() []flux.ImageID {
+func servicesToRepositories(k8s cluster.Cluster, log log.Logger) func() []registry.ImageCreds {
+	return func() []registry.ImageCreds {
 		svcs, err := k8s.AllServices("")
 		if err != nil {
 			log.Log("err", err.Error())
-			return []flux.ImageID{}
+			return []registry.ImageCreds{}
 		}
-		repos := make([]flux.ImageID, 0)
+		repos := make([]registry.ImageCreds, 0)
 		for _, s := range svcs {
+			bytesArr, err := k8s.ImagePullCredentials(s.ID)
+			if err != nil {
+				log.Log("err", err.Error())
+				continue
+			}
+			var creds registry.Credentials
+			for _, bytes := range bytesArr {
+				c, err := registry.ParseCredentials(bytes)
+				if err != nil {
+					log.Log("err", err.Error())
+					continue
+				}
+				creds.Merge(c)
+			}
 			for _, c := range s.Containers.Containers {
 				r, err := flux.ParseImageID(c.Image)
 				if err != nil {
 					log.Log("err", err.Error())
 					continue
 				}
-				repos = append(repos, r)
+				repos = append(repos, registry.ImageCreds{ID: r, Creds: creds})
 			}
 
 		}

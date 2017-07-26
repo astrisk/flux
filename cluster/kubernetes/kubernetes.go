@@ -8,16 +8,18 @@ import (
 	"bytes"
 	"fmt"
 
+	"encoding/base64"
+
 	k8syaml "github.com/ghodss/yaml"
 	"github.com/go-kit/kit/log"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
-	discovery "k8s.io/client-go/1.5/discovery"
+	"k8s.io/client-go/1.5/discovery"
 	k8sclient "k8s.io/client-go/1.5/kubernetes"
 	v1core "k8s.io/client-go/1.5/kubernetes/typed/core/v1"
 	v1beta1extensions "k8s.io/client-go/1.5/kubernetes/typed/extensions/v1beta1"
-	api "k8s.io/client-go/1.5/pkg/api"
-	v1 "k8s.io/client-go/1.5/pkg/api/v1"
+	"k8s.io/client-go/1.5/pkg/api"
+	"k8s.io/client-go/1.5/pkg/api/v1"
 	apiext "k8s.io/client-go/1.5/pkg/apis/extensions/v1beta1"
 
 	"github.com/weaveworks/flux"
@@ -481,6 +483,51 @@ func (c *Cluster) PublicSSHKey(regenerate bool) (ssh.PublicKey, error) {
 	}
 	publicKey, _ := c.sshKeyRing.KeyPair()
 	return publicKey, nil
+}
+
+func (c *Cluster) ImagePullCredentials(id flux.ServiceID) (creds [][]byte, err error) {
+	ns, svc := id.Components()
+	services := c.client.Services(ns)
+	controllers, err := c.podControllersInNamespace(ns)
+	if err != nil {
+		err = errors.Wrapf(err, "finding pod controllers for namespace %s", ns)
+		return
+	}
+
+	service, err := services.Get(svc)
+	if err != nil {
+		err = cluster.ErrNoMatchingService
+		return
+	}
+
+	pc, err := matchController(service, controllers)
+	if err != nil {
+		err = cluster.ErrNoMatching
+		return
+	}
+
+	secrets := pc.ReplicationController.Spec.Template.Spec.ImagePullSecrets
+	for _, s := range secrets {
+		s, err := c.client.Secrets(ns).Get(s.Name)
+
+		if s.Type != v1.SecretTypeDockercfg {
+			continue
+		}
+		encoded, ok := s.Data[v1.DockerConfigKey]
+		if !ok {
+			err = errors.Wrapf(err, "retrieving credentials from pod %s", svc)
+			continue
+		}
+		var decoded []byte
+		_, err = base64.StdEncoding.Decode(decoded, encoded)
+		if err != nil {
+			err = errors.Wrapf(err, "decoding credentials from pod %s", svc)
+			continue
+		}
+		println(string(decoded))
+		creds = append(creds, decoded)
+	}
+	return
 }
 
 // --- end cluster.Cluster

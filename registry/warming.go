@@ -28,9 +28,14 @@ type Warmer struct {
 	Burst         int
 }
 
+type ImageCreds struct {
+	ID    flux.ImageID
+	Creds Credentials
+}
+
 // Continuously get the images to populate the cache with, and
 // populate the cache with them.
-func (w *Warmer) Loop(stop <-chan struct{}, wg *sync.WaitGroup, imagesToFetchFunc func() []flux.ImageID) {
+func (w *Warmer) Loop(stop <-chan struct{}, wg *sync.WaitGroup, imagesToFetchFunc func() []ImageCreds) {
 	defer wg.Done()
 
 	if w.Logger == nil || w.ClientFactory == nil || w.Expiry == 0 || w.Writer == nil || w.Reader == nil {
@@ -55,19 +60,19 @@ func (w *Warmer) Loop(stop <-chan struct{}, wg *sync.WaitGroup, imagesToFetchFun
 	}
 }
 
-func (w *Warmer) warm(id flux.ImageID) {
-	client, err := w.ClientFactory.ClientFor(id.Host)
+func (w *Warmer) warm(img ImageCreds) {
+	client, err := w.ClientFactory.ClientFor(img.ID.Host, img.Creds)
 	if err != nil {
 		w.Logger.Log("err", err.Error())
 		return
 	}
 	defer client.Cancel()
 
-	username := w.Creds.credsFor(id.Host).username
+	username := w.Creds.credsFor(img.ID.Host).username
 
 	// Refresh tags first
 	// Only, for example, "library/alpine" because we have the host information in the client above.
-	tags, err := client.Tags(id)
+	tags, err := client.Tags(img.ID)
 	if err != nil {
 		if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) && !strings.Contains(err.Error(), "net/http: request canceled") {
 			w.Logger.Log("err", errors.Wrap(err, "requesting tags"))
@@ -81,7 +86,7 @@ func (w *Warmer) warm(id flux.ImageID) {
 		return
 	}
 
-	key, err := cache.NewTagKey(username, id)
+	key, err := cache.NewTagKey(username, img.ID)
 	if err != nil {
 		w.Logger.Log("err", errors.Wrap(err, "creating key for cache"))
 		return
@@ -99,7 +104,7 @@ func (w *Warmer) warm(id flux.ImageID) {
 	for _, tag := range tags {
 		// See if we have the manifest already cached
 		// We don't want to re-download a manifest again.
-		i := id.WithNewTag(tag)
+		i := img.ID.WithNewTag(tag)
 		key, err := cache.NewManifestKey(username, i)
 		if err != nil {
 			w.Logger.Log("err", errors.Wrap(err, "creating key for memcache"))
@@ -121,10 +126,10 @@ func (w *Warmer) warm(id flux.ImageID) {
 	if len(toUpdate) == 0 {
 		return
 	}
-	w.Logger.Log("fetching", id.String(), "to-update", len(toUpdate))
+	w.Logger.Log("fetching", img.ID.String(), "to-update", len(toUpdate))
 
 	if expired {
-		w.Logger.Log("expiring", id.HostNamespaceImage())
+		w.Logger.Log("expiring", img.ID.HostNamespaceImage())
 	}
 
 	// The upper bound for concurrent fetches against a single host is
@@ -164,7 +169,7 @@ func (w *Warmer) warm(id flux.ImageID) {
 		}(imID)
 	}
 	awaitFetchers.Wait()
-	w.Logger.Log("updated", id.HostNamespaceImage())
+	w.Logger.Log("updated", img.ID.HostNamespaceImage())
 }
 
 func withinExpiryBuffer(expiry time.Time, buffer time.Duration) bool {

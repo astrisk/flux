@@ -23,6 +23,7 @@ type Cluster interface {
 	Export() ([]byte, error)
 	Sync(SyncDef) error
 	PublicSSHKey(regenerate bool) (ssh.PublicKey, error)
+	ImagePullCredentials(flux.ServiceID) ([][]byte, error) // i.e. dockerconfig file. Return bytes to avoid package coupling.
 }
 
 // Service describes a platform service, generally a floating IP with one or
